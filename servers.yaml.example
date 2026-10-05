@@ -1,0 +1,29 @@
+# ===================================================================
+#  Пример файла серверов для мониторинга (servers.yaml.example)
+#  Скопируйте этот файл в servers.yaml и укажите ваши реальные узлы:
+#    cp servers.yaml.example servers.yaml
+# ===================================================================
+
+servers:
+  - name: 'Web Server (HTTP)'
+    host: 'example.com'
+    port: 80
+    check_type: 'http'
+    http_path: '/'
+    expected_status: 200
+    interval_seconds: 10
+    timeout_ms: 3000
+
+  - name: 'App Node 1 (SSH / Metrics)'
+    host: '192.168.1.10'
+    port: 22
+    check_type: 'tcp'
+    interval_seconds: 10
+    timeout_ms: 3000
+
+  - name: 'Database Server (TCP)'
+    host: '192.168.1.20'
+    port: 5432
+    check_type: 'tcp'
+    interval_seconds: 15
+    timeout_ms: 3000

@@ -1,0 +1,33 @@
+# Rust build artifacts
+/target
+Cargo.lock
+
+# Node / Frontend build artifacts
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local sensitive configuration (your real servers and passwords)
+servers.yaml
+config.yaml
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and temp files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
