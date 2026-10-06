@@ -94,6 +94,18 @@ pub struct PortInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pm2ProcessInfo {
+    pub name: String,
+    pub pm_id: u32,
+    pub status: String,
+    pub pid: Option<u32>,
+    pub cpu: f64,
+    pub memory_bytes: u64,
+    pub restarts: u32,
+    pub uptime_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerMetrics {
     pub cpu: CpuMetrics,
     pub ram: RamMetrics,
@@ -115,6 +127,7 @@ pub struct ServerRuntime {
     pub metrics: Option<ServerMetrics>,
     pub docker: Option<Vec<DockerContainerInfo>>,
     pub tmux: Option<Vec<TmuxSessionInfo>>,
+    pub pm2: Option<Vec<Pm2ProcessInfo>>,
     pub ports: Option<Vec<PortInfo>>,
     #[serde(skip)]
     pub last_run_instant: Option<Instant>,
@@ -135,6 +148,7 @@ impl ServerRuntime {
             metrics: None,
             docker: None,
             tmux: None,
+            pm2: None,
             ports: None,
             last_run_instant: None,
             last_ssh_instant: None,
@@ -146,6 +160,7 @@ impl ServerRuntime {
         metrics: Option<ServerMetrics>,
         docker: Option<Vec<DockerContainerInfo>>,
         tmux: Option<Vec<TmuxSessionInfo>>,
+        pm2: Option<Vec<Pm2ProcessInfo>>,
         ports: Option<Vec<PortInfo>>,
     ) {
         if metrics.is_some() {
@@ -156,6 +171,9 @@ impl ServerRuntime {
         }
         if tmux.is_some() {
             self.tmux = tmux;
+        }
+        if pm2.is_some() {
+            self.pm2 = pm2;
         }
         if ports.is_some() {
             self.ports = ports;

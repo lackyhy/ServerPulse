@@ -17,11 +17,11 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::monitor::{
-    check_all_now, fetch_server_docker, fetch_server_metrics, fetch_server_ports,
+    check_all_now, fetch_server_docker, fetch_server_metrics, fetch_server_pm2, fetch_server_ports,
     fetch_server_tmux, reload_config_from_disk,
 };
 use crate::state::{
-    AppEvent, DockerContainerInfo, PortInfo, ServerMetrics, ServersResponse, SharedState,
+    AppEvent, DockerContainerInfo, Pm2ProcessInfo, PortInfo, ServerMetrics, ServersResponse, SharedState,
     TmuxSessionInfo,
 };
 
@@ -39,6 +39,7 @@ pub fn app_router(state: SharedState) -> Router {
         .route("/server-metrics", get(get_server_metrics))
         .route("/server-docker", get(get_server_docker))
         .route("/server-tmux", get(get_server_tmux))
+        .route("/server-pm2", get(get_server_pm2))
         .route("/server-ports", get(get_server_ports))
         .route("/events", get(sse_events))
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
@@ -290,6 +291,31 @@ async fn get_server_tmux(
 
     match fetch_server_tmux(&cfg).await {
         Ok(sessions) => Ok(Json(sessions)),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+async fn get_server_pm2(
+    State(state): State<SharedState>,
+    Query(query): Query<MetricsQuery>,
+) -> Result<Json<Vec<Pm2ProcessInfo>>, (StatusCode, String)> {
+    let cfg = {
+        let guard = state.read().await;
+        guard.servers.get(&query.name).map(|s| s.config.clone())
+    };
+
+    let cfg = cfg.ok_or_else(|| (StatusCode::NOT_FOUND, format!("Server '{}' not found", query.name)))?;
+
+    match fetch_server_pm2(&cfg).await {
+        Ok(processes) => {
+            let mut guard = state.write().await;
+            if let Some(s) = guard.servers.get_mut(&query.name) {
+                s.pm2 = Some(processes.clone());
+                let cloned = s.clone();
+                let _ = guard.tx_events.send(AppEvent::ServerUpdated(cloned));
+            }
+            Ok(Json(processes))
+        }
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
 }

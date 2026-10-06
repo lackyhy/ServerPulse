@@ -4,6 +4,7 @@ import type {
   ServerMetrics,
   DockerContainerInfo,
   TmuxSessionInfo,
+  Pm2ProcessInfo,
   PortInfo,
 } from './types';
 
@@ -111,6 +112,20 @@ export async function fetchServerTmux(serverName: string): Promise<TmuxSessionIn
   if (!res.ok) {
     const errorText = await res.text();
     throw new Error(errorText || `Failed to fetch Tmux sessions`);
+  }
+  return res.json();
+}
+
+export async function fetchServerPm2(serverName: string): Promise<Pm2ProcessInfo[]> {
+  const res = await fetch(`${API_BASE}/server-pm2?name=${encodeURIComponent(serverName)}`, {
+    headers: getAuthHeaders(),
+  });
+  if (res.status === 403) {
+    throw new Error('403_FORBIDDEN');
+  }
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(errorText || `Failed to fetch PM2 processes`);
   }
   return res.json();
 }

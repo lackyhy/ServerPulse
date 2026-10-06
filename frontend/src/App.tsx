@@ -31,7 +31,7 @@ export const App: React.FC = () => {
   const [sortBy, setSortBy] = useState<SortOption>('default');
   const [modalTarget, setModalTarget] = useState<{
     server: ServerRuntime;
-    tab: 'metrics' | 'docker' | 'tmux' | 'ports';
+    tab: 'metrics' | 'docker' | 'tmux' | 'pm2' | 'ports';
   } | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [, setTick] = useState<number>(0);

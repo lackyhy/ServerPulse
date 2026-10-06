@@ -77,6 +77,17 @@ export interface TmuxSessionInfo {
   attached: boolean;
 }
 
+export interface Pm2ProcessInfo {
+  name: string;
+  pm_id: number;
+  status: string;
+  pid?: number | null;
+  cpu: number;
+  memory_bytes: number;
+  restarts: number;
+  uptime_ms?: number | null;
+}
+
 export interface PortInfo {
   proto: string;
   state: string;
@@ -97,6 +108,7 @@ export interface ServerRuntime {
   metrics?: ServerMetrics | null;
   docker?: DockerContainerInfo[] | null;
   tmux?: TmuxSessionInfo[] | null;
+  pm2?: Pm2ProcessInfo[] | null;
   ports?: PortInfo[] | null;
 }
 

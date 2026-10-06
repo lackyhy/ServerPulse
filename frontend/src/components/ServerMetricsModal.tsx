@@ -21,18 +21,21 @@ import {
   Check,
   Globe,
   Lock,
+  RotateCw,
 } from 'lucide-react';
 import type {
   ServerRuntime,
   ServerMetrics,
   DockerContainerInfo,
   TmuxSessionInfo,
+  Pm2ProcessInfo,
   PortInfo,
 } from '../types';
 import {
   fetchServerMetrics,
   fetchServerDocker,
   fetchServerTmux,
+  fetchServerPm2,
   fetchServerPorts,
 } from '../api';
 
@@ -42,7 +45,7 @@ interface ServerMetricsModalProps {
   initialTab?: TabType;
 }
 
-type TabType = 'metrics' | 'docker' | 'tmux' | 'ports';
+type TabType = 'metrics' | 'docker' | 'tmux' | 'pm2' | 'ports';
 
 export const ServerMetricsModal: React.FC<ServerMetricsModalProps> = ({
   server,
@@ -70,6 +73,13 @@ export const ServerMetricsModal: React.FC<ServerMetricsModalProps> = ({
   );
   const [tmuxLoading, setTmuxLoading] = useState<boolean>(false);
   const [tmuxError, setTmuxError] = useState<string | null>(null);
+
+  // PM2 state
+  const [pm2Processes, setPm2Processes] = useState<Pm2ProcessInfo[] | null>(
+    server.pm2 || null
+  );
+  const [pm2Loading, setPm2Loading] = useState<boolean>(false);
+  const [pm2Error, setPm2Error] = useState<string | null>(null);
 
   // Ports state (ss -tulnp)
   const [ports, setPorts] = useState<PortInfo[] | null>(server.ports || null);
@@ -118,6 +128,19 @@ export const ServerMetricsModal: React.FC<ServerMetricsModalProps> = ({
     }
   }, [server.config.name]);
 
+  const loadPm2 = useCallback(async () => {
+    try {
+      setPm2Loading(true);
+      setPm2Error(null);
+      const data = await fetchServerPm2(server.config.name);
+      setPm2Processes(data);
+    } catch (err: any) {
+      setPm2Error(err.message || 'Не удалось получить процессы PM2');
+    } finally {
+      setPm2Loading(false);
+    }
+  }, [server.config.name]);
+
   const loadPorts = useCallback(async () => {
     try {
       setPortsLoading(true);
@@ -142,10 +165,12 @@ export const ServerMetricsModal: React.FC<ServerMetricsModalProps> = ({
       loadDocker();
     } else if (activeTab === 'tmux' && tmuxSessions === null && !tmuxLoading) {
       loadTmux();
+    } else if (activeTab === 'pm2' && pm2Processes === null && !pm2Loading) {
+      loadPm2();
     } else if (activeTab === 'ports' && ports === null && !portsLoading) {
       loadPorts();
     }
-  }, [activeTab, dockerContainers, dockerLoading, tmuxSessions, tmuxLoading, ports, portsLoading, loadDocker, loadTmux, loadPorts]);
+  }, [activeTab, dockerContainers, dockerLoading, tmuxSessions, tmuxLoading, pm2Processes, pm2Loading, ports, portsLoading, loadDocker, loadTmux, loadPm2, loadPorts]);
 
   // Auto-refresh interval (for metrics)
   useEffect(() => {
@@ -284,16 +309,17 @@ export const ServerMetricsModal: React.FC<ServerMetricsModalProps> = ({
                 if (activeTab === 'metrics') loadMetrics();
                 else if (activeTab === 'docker') loadDocker();
                 else if (activeTab === 'tmux') loadTmux();
+                else if (activeTab === 'pm2') loadPm2();
                 else if (activeTab === 'ports') loadPorts();
               }}
-              disabled={metricsLoading || dockerLoading || tmuxLoading || portsLoading}
+              disabled={metricsLoading || dockerLoading || tmuxLoading || pm2Loading || portsLoading}
               className="btn-secondary"
               title="Обновить данные"
             >
               <RefreshCw
                 size={15}
                 className={
-                  metricsLoading || dockerLoading || tmuxLoading || portsLoading ? 'spin' : ''
+                  metricsLoading || dockerLoading || tmuxLoading || pm2Loading || portsLoading ? 'spin' : ''
                 }
               />
               <span>Обновить</span>
@@ -414,6 +440,40 @@ export const ServerMetricsModal: React.FC<ServerMetricsModalProps> = ({
                 }}
               >
                 {tmuxSessions.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab('pm2')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 16px',
+              borderRadius: '8px',
+              fontSize: '0.85rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              border: activeTab === 'pm2' ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid transparent',
+              background: activeTab === 'pm2' ? 'rgba(168, 85, 247, 0.15)' : 'transparent',
+              color: activeTab === 'pm2' ? '#ffffff' : 'var(--text-muted)',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            <RotateCw size={16} color={activeTab === 'pm2' ? '#c084fc' : 'var(--text-dim)'} />
+            <span>PM2</span>
+            {pm2Processes && (
+              <span
+                style={{
+                  fontSize: '0.7rem',
+                  padding: '1px 6px',
+                  borderRadius: '10px',
+                  background: 'rgba(168, 85, 247, 0.2)',
+                  color: '#c084fc',
+                }}
+              >
+                {pm2Processes.length}
               </span>
             )}
           </button>
@@ -1035,6 +1095,205 @@ export const ServerMetricsModal: React.FC<ServerMetricsModalProps> = ({
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: PM2 PROCESSES */}
+        {activeTab === 'pm2' && (
+          <div>
+            {pm2Error && (
+              <div
+                style={{
+                  padding: '14px 18px',
+                  borderRadius: '10px',
+                  background: 'rgba(244, 63, 94, 0.12)',
+                  border: '1px solid rgba(244, 63, 94, 0.3)',
+                  color: '#fca5a5',
+                  fontSize: '0.85rem',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                  marginBottom: '20px',
+                }}
+              >
+                <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <strong>Ошибка PM2:</strong>
+                  <div style={{ marginTop: '2px' }}>{pm2Error}</div>
+                </div>
+              </div>
+            )}
+
+            {pm2Loading ? (
+              <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)' }}>
+                <div className="status-dot status-dot-pending pulse-ring" style={{ margin: '0 auto 16px', width: '16px', height: '16px' }} />
+                <p>Запрос списка процессов PM2 по SSH (pm2 jlist)...</p>
+              </div>
+            ) : !pm2Processes || pm2Processes.length === 0 ? (
+              <div
+                className="glass-panel"
+                style={{
+                  padding: '50px 20px',
+                  textAlign: 'center',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <RotateCw size={40} color="var(--text-dim)" style={{ marginBottom: '12px' }} />
+                <h3 style={{ color: 'var(--text-main)', fontSize: '1.05rem', marginBottom: '6px' }}>
+                  Нет запущенных процессов PM2
+                </h3>
+                <p style={{ fontSize: '0.85rem' }}>
+                  На этом сервере PM2 не установлен или список процессов пуст.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>
+                    Всего процессов: <strong style={{ color: '#ffffff' }}>{pm2Processes.length}</strong>
+                    {' &bull; '}
+                    Online:{' '}
+                    <strong style={{ color: '#10b981' }}>
+                      {pm2Processes.filter((p) => p.status === 'online').length}
+                    </strong>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      fontFamily: 'JetBrains Mono',
+                      padding: '3px 8px',
+                      borderRadius: '4px',
+                      background: 'rgba(168, 85, 247, 0.1)',
+                      color: '#c084fc',
+                      border: '1px solid rgba(168, 85, 247, 0.25)',
+                    }}
+                  >
+                    pm2 status
+                  </span>
+                </div>
+
+                {pm2Processes.map((proc) => {
+                  const isOnline = proc.status === 'online';
+                  const isErrored = proc.status === 'errored';
+
+                  const badgeClass = isOnline
+                    ? 'status-online'
+                    : isErrored
+                    ? 'status-offline'
+                    : 'status-pending';
+
+                  const uptimeFormatted = proc.uptime_ms != null
+                    ? formatUptime(Math.floor(proc.uptime_ms / 1000))
+                    : '—';
+
+                  return (
+                    <div
+                      key={`${proc.pm_id}-${proc.name}`}
+                      className="glass-panel"
+                      style={{
+                        padding: '16px 20px',
+                        border: isOnline
+                          ? '1px solid rgba(168, 85, 247, 0.25)'
+                          : '1px solid rgba(255, 255, 255, 0.08)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '14px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', minWidth: '220px' }}>
+                        <div
+                          style={{
+                            padding: '8px',
+                            borderRadius: '8px',
+                            background: isOnline ? 'rgba(168, 85, 247, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                            color: isOnline ? '#c084fc' : 'var(--text-dim)',
+                          }}
+                        >
+                          <RotateCw size={18} />
+                        </div>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '1.05rem', fontWeight: 600, color: '#ffffff' }}>
+                              {proc.name}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: '0.7rem',
+                                fontFamily: 'JetBrains Mono',
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                background: 'rgba(255, 255, 255, 0.06)',
+                                color: 'var(--text-muted)',
+                              }}
+                            >
+                              id: {proc.pm_id}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '3px' }}>
+                            PID: <strong style={{ color: 'var(--text-muted)' }}>{proc.pid ?? '—'}</strong>
+                            {' &bull; '}
+                            Аптайм: {uptimeFormatted}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Stats & status */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              fontFamily: 'JetBrains Mono',
+                              padding: '4px 10px',
+                              borderRadius: '6px',
+                              background: 'rgba(255, 255, 255, 0.05)',
+                              color: 'var(--text-muted)',
+                            }}
+                            title="Использование CPU"
+                          >
+                            CPU: <strong style={{ color: '#ffffff' }}>{proc.cpu.toFixed(1)}%</strong>
+                          </span>
+
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              fontFamily: 'JetBrains Mono',
+                              padding: '4px 10px',
+                              borderRadius: '6px',
+                              background: 'rgba(255, 255, 255, 0.05)',
+                              color: 'var(--text-muted)',
+                            }}
+                            title="Оперативная память"
+                          >
+                            RAM: <strong style={{ color: '#ffffff' }}>{formatBytes(proc.memory_bytes)}</strong>
+                          </span>
+
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              fontFamily: 'JetBrains Mono',
+                              padding: '4px 10px',
+                              borderRadius: '6px',
+                              background: 'rgba(255, 255, 255, 0.05)',
+                              color: proc.restarts > 5 ? '#f59e0b' : 'var(--text-muted)',
+                            }}
+                            title="Количество перезапусков"
+                          >
+                            ↺ {proc.restarts}
+                          </span>
+                        </div>
+
+                        <span className={`badge-status ${badgeClass}`}>
+                          {proc.status}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

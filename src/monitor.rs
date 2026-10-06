@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use crate::config::{load_config, CheckType, ServerConfig};
 use crate::state::{
-    AppEvent, DockerContainerInfo, PortInfo, ServerMetrics, ServerRuntime, ServerStatusKind, SharedState,
+    AppEvent, DockerContainerInfo, Pm2ProcessInfo, PortInfo, ServerMetrics, ServerRuntime, ServerStatusKind, SharedState,
     TmuxSessionInfo,
 };
 
@@ -231,6 +231,7 @@ pub async fn check_all_now(state: SharedState) -> crate::state::ServersResponse 
                         ssh.metrics,
                         Some(ssh.docker),
                         Some(ssh.tmux),
+                        Some(ssh.pm2),
                         Some(ssh.ports),
                     );
                 }
@@ -361,6 +362,7 @@ pub fn start_monitor_worker(state: SharedState) {
                                 data.metrics,
                                 Some(data.docker),
                                 Some(data.tmux),
+                                Some(data.pm2),
                                 Some(data.ports),
                             );
                             let cloned_runtime = runtime.clone();
@@ -592,6 +594,87 @@ pub async fn fetch_server_tmux(config: &ServerConfig) -> Result<Vec<TmuxSessionI
     Ok(sessions)
 }
 
+pub fn parse_pm2_output(stdout_str: &str) -> Vec<Pm2ProcessInfo> {
+    let mut processes = Vec::new();
+
+    let trimmed = stdout_str.trim();
+    if let Some(start) = trimmed.find('[') {
+        if let Some(end) = trimmed.rfind(']') {
+            if end > start {
+                let json_slice = &trimmed[start..=end];
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_slice) {
+                    if let Some(arr) = v.as_array() {
+                        for item in arr {
+                            let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
+                            let pm_id = item.get("pm_id").and_then(|id| id.as_u64()).unwrap_or(0) as u32;
+                            let pid = item.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32);
+
+                            let (status, restarts, uptime_ms, cpu, memory_bytes) = if let Some(env) = item.get("pm2_env") {
+                                let status = env.get("status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string();
+                                let restarts = env.get("restart_time").and_then(|r| r.as_u64()).unwrap_or(0) as u32;
+                                let pm_uptime = env.get("pm_uptime").and_then(|u| u.as_u64());
+                                let now_ms = Utc::now().timestamp_millis() as u64;
+                                let uptime_ms = pm_uptime.and_then(|start_ms| {
+                                    if now_ms >= start_ms {
+                                        Some(now_ms - start_ms)
+                                    } else {
+                                        None
+                                    }
+                                });
+
+                                let (cpu, mem) = if let Some(monit) = item.get("monit") {
+                                    let c = monit.get("cpu").and_then(|c| c.as_f64()).unwrap_or(0.0);
+                                    let m = monit.get("memory").and_then(|m| m.as_u64()).unwrap_or(0);
+                                    (c, m)
+                                } else {
+                                    (0.0, 0)
+                                };
+
+                                (status, restarts, uptime_ms, cpu, mem)
+                            } else {
+                                ("unknown".to_string(), 0, None, 0.0, 0)
+                            };
+
+                            processes.push(Pm2ProcessInfo {
+                                name,
+                                pm_id,
+                                status,
+                                pid,
+                                cpu,
+                                memory_bytes,
+                                restarts,
+                                uptime_ms,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    processes
+}
+
+pub async fn fetch_server_pm2(config: &ServerConfig) -> Result<Vec<Pm2ProcessInfo>, String> {
+    let port = config.port.unwrap_or(8998);
+    let host = &config.host;
+    let target = format!("root@{}", host);
+
+    let mut cmd = prepare_ssh_cmd(
+        port,
+        &target,
+        "pm2 jlist 2>/dev/null || npx --no-install pm2 jlist 2>/dev/null || true",
+    );
+
+    let output = tokio::time::timeout(Duration::from_secs(6), cmd.output())
+        .await
+        .map_err(|_| format!("SSH timeout connecting to {}:{}", host, port))?
+        .map_err(|e| format!("Failed to run SSH: {}", e))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_pm2_output(&stdout_str))
+}
+
 pub fn parse_ports_output(stdout_str: &str) -> Vec<PortInfo> {
     let mut ports = Vec::new();
 
@@ -731,6 +814,7 @@ pub struct SshFullData {
     pub metrics: Option<ServerMetrics>,
     pub docker: Vec<DockerContainerInfo>,
     pub tmux: Vec<TmuxSessionInfo>,
+    pub pm2: Vec<Pm2ProcessInfo>,
     pub ports: Vec<PortInfo>,
 }
 
@@ -806,6 +890,8 @@ echo "===DOCKER==="
 docker ps -a --format "{{json .}}" 2>/dev/null || true
 echo "===TMUX==="
 tmux list-sessions -F "#{session_name}|#{session_windows}|#{session_created}|#{?session_attached,attached,detached}" 2>/dev/null || true
+echo "===PM2==="
+pm2 jlist 2>/dev/null || npx --no-install pm2 jlist 2>/dev/null || true
 echo "===PORTS==="
 ss -tulnp -H 2>/dev/null || ss -tulnp 2>/dev/null || netstat -tulnp 2>/dev/null || true
 "##;
@@ -822,13 +908,17 @@ ss -tulnp -H 2>/dev/null || ss -tulnp 2>/dev/null || netstat -tulnp 2>/dev/null 
     let metrics_part = parts.get(0).unwrap_or(&"");
     let after_docker = parts.get(1).unwrap_or(&"");
 
-    let docker_tmux_ports: Vec<&str> = after_docker.split("===TMUX===").collect();
-    let docker_part = docker_tmux_ports.get(0).unwrap_or(&"");
-    let after_tmux = docker_tmux_ports.get(1).unwrap_or(&"");
+    let docker_tmux_rest: Vec<&str> = after_docker.split("===TMUX===").collect();
+    let docker_part = docker_tmux_rest.get(0).unwrap_or(&"");
+    let after_tmux = docker_tmux_rest.get(1).unwrap_or(&"");
 
-    let tmux_ports: Vec<&str> = after_tmux.split("===PORTS===").collect();
-    let tmux_part = tmux_ports.get(0).unwrap_or(&"");
-    let ports_part = tmux_ports.get(1).unwrap_or(&"");
+    let tmux_pm2_ports: Vec<&str> = after_tmux.split("===PM2===").collect();
+    let tmux_part = tmux_pm2_ports.get(0).unwrap_or(&"");
+    let after_pm2 = tmux_pm2_ports.get(1).unwrap_or(&"");
+
+    let pm2_ports: Vec<&str> = after_pm2.split("===PORTS===").collect();
+    let pm2_part = pm2_ports.get(0).unwrap_or(&"");
+    let ports_part = pm2_ports.get(1).unwrap_or(&"");
 
     let metrics = metrics_part
         .lines()
@@ -882,12 +972,14 @@ ss -tulnp -H 2>/dev/null || ss -tulnp 2>/dev/null || netstat -tulnp 2>/dev/null 
         }
     }
 
+    let pm2 = parse_pm2_output(pm2_part);
     let ports = parse_ports_output(ports_part);
 
     Ok(SshFullData {
         metrics,
         docker,
         tmux,
+        pm2,
         ports,
     })
 }
